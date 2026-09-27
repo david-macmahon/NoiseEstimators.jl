@@ -87,7 +87,7 @@ improves *statistical efficiency* for small samples.
 When `k` is given, the moments are split into per-component scales via
 `θ1 + θ2 = mean/k` and `θ1² + θ2² = std²/k`, i.e.
 `(θ1 − θ2)² = 2·std²/k − (mean/k)²`.  A positive value gives
-`pow1,2 = k(sθ ± √d2)/2` (larger first) and `powratio = pow1/pow2`; a
+`pow1,2 = k(sθ ± √d2)/2` (larger first); a
 non-positive value (data less variable than the model allows, which
 happens near balanced components where the effective shape estimate
 reaches the `2k` ceiling) leaves the split *unidentified*, reported as

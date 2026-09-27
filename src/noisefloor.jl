@@ -50,12 +50,12 @@ The returned `NamedTuple` has fields:
   power ratio `ρ`.  This is estimated from the data even when `k` is
   given; a value at or above `2k` indicates data less variable than the
   model allows (e.g. after bandpass flattening).
-- `powratio`, `pow1`, `pow2`: estimated per-component mean powers and
-  their ratio (larger first).  These are only identifiable when `k` is
-  given.  Near-balanced components (and small samples) yield `NaN`
-  values, indicating that the split is not identified (the effective shape
-  estimate reached the `2k` ceiling); `pow1 + pow2 = mean` holds only for
-  identified splits, and resolving imbalances requires many samples.  See
+- `pow1`, `pow2`: estimated per-component mean powers, larger component
+  first.  These are only identifiable when `k` is given.  Near-balanced
+  components (and small samples) yield `NaN` values, indicating that the
+  split is not identified (the effective shape estimate reached the `2k`
+  ceiling); `pow1 + pow2 = mean` holds only for identified splits, and
+  resolving imbalances requires many samples.  See
   the [theory of operation section of the documentation](@ref
   "Theory of operation") for the model, the shape convention, split
   accuracy requirements, and a worked example.
@@ -99,7 +99,7 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
     qlo_val, q50 = fast_quantile(data, [qlo, 0.5])
     if !(q50 > 0) || !(qlo_val < q50)
         return (mean = Float64(mean(data)), std = Inf, shape = nothing,
-                powratio = nothing, pow1 = nothing, pow2 = nothing)
+                pow1 = nothing, pow2 = nothing)
     end
 
     # Iterate the effective shape and mean to a fixed point: the shape
@@ -140,7 +140,7 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
     end
 
     if k === nothing
-        powratio = pow1 = pow2 = nothing
+        pow1 = pow2 = nothing
     else
         # Per-component split from the moments: `θ1 + θ2 = mean/k` and
         # `θ1² + θ2² = std²/k`, so `(θ1 - θ2)² = 2 * std²/k - (mean/k)²`.
@@ -154,13 +154,12 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
             d = sqrt(clamp(d2, 0.0, sθ^2))
             pow1 = k * (sθ + d) / 2
             pow2 = k * (sθ - d) / 2
-            powratio = pow1 / pow2
         else
-            powratio = pow1 = pow2 = NaN
+            pow1 = pow2 = NaN
         end
     end
 
-    (mean = mean_est, std = std_est, shape, powratio, pow1, pow2)
+    (mean = mean_est, std = std_est, shape, pow1, pow2)
 end
 
 # (mean, std) projection of `noisefloor` (the shape that thresholding

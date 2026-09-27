@@ -18,7 +18,7 @@ using NoiseEstimators
         @test nfst.std ≈ sqrt(k) rtol = 0.03
         @test nfst.shape ≈ k rtol = 0.1
         @test nfst.pow1 + nfst.pow2 ≈ nfst.mean rtol = 1e-6
-        @test nfst.powratio > 10  # second component essentially dead
+        @test nfst.pow1 / nfst.pow2 > 10  # second component essentially dead
     end
 
     # Two imbalanced components (θ1:θ2 = 1:2)
@@ -26,7 +26,7 @@ using NoiseEstimators
     nfst = noisefloor(nd; k = 4)
     @test nfst.mean ≈ 4 * (1/3 + 2/3) rtol = 0.03
     @test nfst.std ≈ sqrt(4 * (1/9 + 4/9)) rtol = 0.08
-    @test 1.4 < nfst.powratio < 3.5  # true ratio 2.0 (moment-based split)
+    @test 1.4 < nfst.pow1 / nfst.pow2 < 3.5  # true ratio 2.0 (moment-based split)
     @test nfst.pow1 > nfst.pow2 > 0
 
     # The lower quantile `qlo` trades contamination robustness against
@@ -43,7 +43,7 @@ using NoiseEstimators
     nde = twopol(4, 0.5, 0.5, 1_000_000)
     nfst = noisefloor(nde; k = 4)
     @test nfst.mean ≈ 4 rtol = 0.03
-    @test isnan(nfst.powratio) || abs(nfst.powratio - 1) < 0.3
+    @test isnan(nfst.pow1) || abs(nfst.pow1 / nfst.pow2 - 1) < 0.3
     @test nfst.shape ≈ 8 rtol = 0.1
 
     # Excess power contamination: 1% of bins at 100x the floor leave the
@@ -60,7 +60,6 @@ using NoiseEstimators
     nfst = noisefloor(nd)
     @test nfst.mean ≈ 4 rtol = 0.03
     @test 4 < nfst.shape < 10
-    @test nfst.powratio === nothing
     @test nfst.pow1 === nothing && nfst.pow2 === nothing
 
     # Data summed from Nt samples per output: per-component shape is
@@ -75,10 +74,10 @@ using NoiseEstimators
 
     # Degenerate data mirrors the fallback semantics
     @test noisefloor(zeros(100)) ==
-          (mean = 0.0, std = Inf, shape = nothing, powratio = nothing,
+          (mean = 0.0, std = Inf, shape = nothing,
            pow1 = nothing, pow2 = nothing)
     @test noisefloor(fill(3.5, 100)) ==
-          (mean = 3.5, std = Inf, shape = nothing, powratio = nothing,
+          (mean = 3.5, std = Inf, shape = nothing,
            pow1 = nothing, pow2 = nothing)
     @test_throws ArgumentError noisefloor(nd; k = 0)
     @test_throws ArgumentError noisefloor(nd; qlo = 0)
@@ -88,7 +87,6 @@ using NoiseEstimators
     # is reported as NaN rather than a spurious balanced split
     ndz = 1.0 .+ 1e-3 .* randexp(nrng, 1000)
     nfz = noisefloor(ndz; k = 4)
-    @test isnan(nfz.powratio)
     @test isnan(nfz.pow1) && isnan(nfz.pow2)
 
     # (mean, std) projection matches the full result

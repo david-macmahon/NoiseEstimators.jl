@@ -25,8 +25,11 @@ julia> using NoiseEstimators
 julia> data = randexp(Float64, 1_000_000);   # Gamma(k=1) noise
 
 julia> nf = noisefloor(data; k = 1)
-(mean = 0.999..., std = 0.999..., shape = 1.00..., powratio = 7.2e5...,
+(mean = 0.999..., std = 0.999..., shape = 1.00...,
  pow1 = 0.999..., pow2 = 1.4e-7...)
+
+julia> nf.pow1 / nf.pow2    # second component essentially dead
+7.2e5...
 
 julia> nf.mean, nf.std
 (0.999..., 0.999...)
