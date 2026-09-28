@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+### Added
+
+- `noisestats(data; robust = true, chans_per_band, kwargs...)` computing
+  the (mean, sigma) pair used for thresholding matrices of power-like
+  data, robust to excess power contamination by default (anchored on
+  `noisefloor` over all elements), with an iterable-of-matrices variant.
+  The non-robust mode returns the plain ensemble statistics of all
+  elements (pooled over each band's elements in banded mode); a constant
+  matrix yields `Inf` sigma so that normalizing by it produces zeros and
+  denormalizing with it produces an `Inf` threshold.
+- Banded per-channel statistics via `chans_per_band`: per-band estimates
+  returned as vectors of length `size(data, 1)` for per-channel
+  thresholding, robust to passband power-level variations along the
+  frequency axis.
+- `noisenormalize`, `noisenormalize!`, and `noisedenormalize` converting
+  between raw values and signal-to-noise units, with scalar or per-channel
+  (vector) statistics.
+- Optional CUDA extension (`NoiseEstimatorsCUDAExt`): the non-robust
+  banded statistics run as a single fused one-pass kernel, and the robust
+  banded statistics are computed in a fixed handful of batched device
+  passes (per-band quantiles via FastQuantiles' banded `fast_quantile`,
+  plus batched count+sum passes with deterministic per-block partials for
+  the clipped-mean refinement), at a cost independent of the number of
+  bands and bitwise reproducible across calls.
+
+### Changed
+
+- `noisefloor`'s estimation internals are refactored into reusable pure
+  helpers (shape fixed point, clipped-mean refinement step, per-component
+  split), and the clipped-mean refinement fuses its survivor count and sum
+  into a single data pass.  Results are unchanged.
+- `noisefloor`'s per-component estimation now runs on FastQuantiles 0.2
+  (whose histogram passes reuse buffers and whose banded selection is
+  shared with the CUDA extension).
+
 ## [0.2.0] - 2026-09-26
 
 ### Removed

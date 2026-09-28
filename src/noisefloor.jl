@@ -106,8 +106,49 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
     # follows from the moment relation `k_eff = mean² / std²` and the mean
     # and standard deviation follow from the quantiles via the effective
     # Gamma conversion factors.
+    mom = _noise_moments(qlo_val, q50; qlo)
+    mean_est = mom.mean
+    std_est = mom.std
+    shape = mom.shape
+
+    if refine
+        # Iterated clipped mean with the exact Gamma bias correction: for
+        # `X ~ Gamma(shape, θ)` with `θ = mean/shape` and clip threshold
+        # `s = clip * mean`, the survivor fraction is
+        # `P(shape, clip * shape)` and `E[X * 1{X < s}]` is
+        # `mean * P(shape + 1, clip * shape)`, so the debiased mean is the
+        # empirical survivor mean times `P(shape, c) / P(shape + 1, c)`.
+        # The survivor count and sum are fused into one data pass.
+        for _ in 1:5
+            s = clip * mean_est
+            n, total = mapreduce(x -> x < s ? (1, Float64(x)) : (0, 0.0),
+                                 (a, b) -> (a[1] + b[1], a[2] + b[2]), data;
+                                 init = (0, 0.0))
+            n == 0 && break
+            mean_new, done = _noise_refine_step(mean_est, total / n, shape, clip)
+            mean_est = mean_new
+            done && break
+        end
+    end
+
+    if k === nothing
+        pow1 = pow2 = nothing
+    else
+        pow1, pow2 = _noise_pow(mean_est, std_est, k)
+    end
+
+    (mean = mean_est, std = std_est, shape, pow1, pow2)
+end
+
+# Moments (mean, standard deviation, effective Gamma shape) of the
+# two-Gamma noise model from signal-free quantiles, iterating the shape to a
+# fixed point (the quantile-to-moment conversion factors depend on the
+# shape).  Pure host math on `(qlo_val, q50)`; shared by `noisefloor` and
+# the batched per-band estimation of the CUDA extension.
+function _noise_moments(qlo_val, q50; qlo)
     shape = 2.0
     mean_est = q50 / _gam_med_mean(shape)
+    std_est = 0.0
     for _ in 1:50
         std_est = (q50 - qlo_val) / _gam_med_qlo_sigma(shape, qlo)
         shape_new = clamp(mean_est^2 / std_est^2, 1e-3, 1e8)
@@ -117,49 +158,35 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
         done && break
     end
     std_est = (q50 - qlo_val) / _gam_med_qlo_sigma(shape, qlo)
+    (mean = mean_est, std = std_est, shape = shape)
+end
 
-    if refine
-        # Iterated clipped mean with the exact Gamma bias correction: for
-        # `X ~ Gamma(shape, θ)` with `θ = mean/shape` and clip threshold
-        # `s = clip * mean`, the survivor fraction is
-        # `P(shape, clip * shape)` and `E[X * 1{X < s}]` is
-        # `mean * P(shape + 1, clip * shape)`, so the debiased mean is the
-        # empirical survivor mean times `P(shape, c) / P(shape + 1, c)`.
-        for _ in 1:5
-            s = clip * mean_est
-            n = count(<(s), data)
-            n == 0 && break
-            empirical = sum(x -> x < s ? Float64(x) : 0.0, data) / n
-            p0 = gamma_inc(shape, clip * shape)[1]
-            p1 = gamma_inc(shape + 1, clip * shape)[1]
-            mean_new = empirical * p0 / p1
-            done = isapprox(mean_new, mean_est; rtol = 1e-6)
-            mean_est = mean_new
-            done && break
-        end
+# One clipped-mean refinement step: debias the empirical survivor mean for
+# the Gamma model and test convergence.  Returns the new mean estimate and
+# whether it converged.
+function _noise_refine_step(mean_est, empirical, shape, clip)
+    p0 = gamma_inc(shape, clip * shape)[1]
+    p1 = gamma_inc(shape + 1, clip * shape)[1]
+    mean_new = empirical * p0 / p1
+    done = isapprox(mean_new, mean_est; rtol = 1e-6)
+    return mean_new, done
+end
+
+# Per-component split from the moments: `θ1 + θ2 = mean/k` and
+# `θ1² + θ2² = std²/k`, so `(θ1 - θ2)² = 2 * std²/k - (mean/k)²`.  A
+# non-positive value (data less variable than the model allows, e.g.
+# near-balanced components with the shape estimate at the `2k` ceiling)
+# leaves the split unidentified and is reported as `NaN`.  Pure host math.
+function _noise_pow(mean_est, std_est, k)
+    sθ = mean_est / k
+    d2 = 2 * std_est^2 / k - sθ^2
+    if d2 > 0
+        d = sqrt(clamp(d2, 0.0, sθ^2))
+        pow1 = k * (sθ + d) / 2
+        pow2 = k * (sθ - d) / 2
+        return pow1, pow2
     end
-
-    if k === nothing
-        pow1 = pow2 = nothing
-    else
-        # Per-component split from the moments: `θ1 + θ2 = mean/k` and
-        # `θ1² + θ2² = std²/k`, so `(θ1 - θ2)² = 2 * std²/k - (mean/k)²`.
-        # A non-positive value (data less variable than the model allows,
-        # e.g. near-balanced components with the shape estimate at the
-        # `2k` ceiling) leaves the split unidentified and is reported as
-        # `NaN`.
-        sθ = mean_est / k
-        d2 = 2 * std_est^2 / k - sθ^2
-        if d2 > 0
-            d = sqrt(clamp(d2, 0.0, sθ^2))
-            pow1 = k * (sθ + d) / 2
-            pow2 = k * (sθ - d) / 2
-        else
-            pow1 = pow2 = NaN
-        end
-    end
-
-    (mean = mean_est, std = std_est, shape, pow1, pow2)
+    return NaN, NaN
 end
 
 # (mean, std) projection of `noisefloor` (the shape that thresholding

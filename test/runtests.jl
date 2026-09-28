@@ -93,3 +93,198 @@ using NoiseEstimators
     @test NoiseEstimators._noisefloor_stats(nd; k = 4) ==
           (mean = noisefloor(nd; k = 4).mean, std = noisefloor(nd; k = 4).std)
 end
+
+@testset "noisestats" begin
+    # The plain (robust = false) mode is the ensemble statistics of all
+    # elements; a constant matrix (including all zeros) has zero standard
+    # deviation, reported as Inf so that normalizing by it produces zeros
+    # and denormalizing with it produces an Inf threshold
+    # (noisenormalize! used to divide by zero, producing NaNs)
+    rngs = MersenneTwister(3)
+    data0 = randexp(rngs, Float32, 37, 64)
+    data1 = zeros(Float32, 37, 64)              # constant (all zero)
+    m, s = noisestats(data0; robust = false)
+    @test m == mean(data0)
+    @test s == std(data0) > 0
+    @test noisestats(data0; robust = false).std == s  # named access
+    @test noisestats([data0, data1]; robust = false) == (mean = m, std = s)
+    data = copy(data0)
+    @test all(isfinite, noisenormalize!(data))
+
+    @test noisestats(data1; robust = false) == (mean = 0.0f0, std = Inf)
+    @test noisenormalize!(data1) == zeros(37, 64)
+    @test noisedenormalize(5.0, data1) == Inf
+
+    # Iterable-of-matrices variants: the mean comes from the first matrix
+    # with finite sigma and the sigma is the minimum across matrices
+    @test noisestats([data1]; robust = false) == (mean = 0.0f0, std = Inf)
+    datas = [copy(data1), copy(data0)]
+    noisenormalize!(datas)
+    @test all(isfinite, datas[1]) && all(isfinite, datas[2])
+    @test noisedenormalize(5.0, [copy(data1)]) == Inf
+    @test noisestats([copy(data1), data0]; robust = false) == (mean = m, std = s)
+    @test noisestats(fill(3.0f0, 4, 8); robust = false) ==
+          (mean = 3.0f0, std = Inf)
+
+    # Robust estimation (delegates to noisefloor): excess power
+    # contamination leaves (mean, std) stable while the plain statistics
+    # are badly biased.  The data is Gamma(2, 1) per sample (two unit-mean
+    # exponential components with k = 2).
+    rngf = MersenneTwister(7)
+    gm = randexp(rngf, Float32, 256, 256) .+ randexp(rngf, Float32, 256, 256)
+    gc = copy(gm)
+    gc[1:1000] .= 1000f0
+    mr, sr = noisestats(gc; robust = true, k = 2)
+    @test mr ≈ 2 rtol = 0.05
+    @test sr ≈ sqrt(2) rtol = 0.15
+    @test noisestats(gc; robust = true, k = 2, qlo = 0.2).mean ≈ 2 rtol = 0.05
+    @test noisestats(gc; robust = false).mean > 5
+    @test noisestats(fill(3.0f0, 4, 8); robust = true) == (mean = 3.0, std = Inf)
+    @test noisestats(zeros(Float32, 4, 4); robust = true) == (mean = 0.0, std = Inf)
+    @test noisestats([gc, gc]; robust = true, k = 2) ==
+          noisestats(gc; robust = true, k = 2)
+    # robust is the default for noisestats; contamination inflates the
+    # plain mean but leaves the robust mean accurate
+    @test noisestats(gc).mean ≈ 2 rtol = 0.05
+    @test noisestats(gc; robust = false).mean > 5
+end
+
+@testset "noisestats per-channel" begin
+    rngb = MersenneTwister(7)
+    # Two 8-channel bands of Gamma(1, 1) noise (exponential power, the
+    # domain of the robust estimator): band 1 has mean 1, band 2 mean 4
+    datab = zeros(16, 64)
+    datab[1:8, :] .= randexp(rngb, 8, 64)
+    datab[9:16, :] .= 4.0 .* randexp(rngb, 8, 64)
+
+    # Banded statistics repeat each band's estimate over its channels; the
+    # plain mode pools each band's 8-by-64 block of 512 values, so its
+    # estimates are already well sampled (exponential noise: sigma = mean)
+    st = noisestats(datab; chans_per_band = 8, robust = false)
+    @test length(st.mean) == 16 && length(st.std) == 16
+    @test st.mean[1] ≈ 1 rtol = 0.15
+    @test st.mean[9] ≈ 4 rtol = 0.15
+    @test st.mean[1:8] == fill(st.mean[1], 8)
+    @test st.mean[9:16] == fill(st.mean[9], 8)
+    @test st.std[1:8] == fill(st.std[1], 8)
+    @test st.std[9:16] == fill(st.std[9], 8)
+    @test st.std[1] ≈ 1 rtol = 0.15
+    @test st.std[9] ≈ 4 rtol = 0.15
+
+    # Robust banded statistics recover the band noise floors
+    str = noisestats(datab; chans_per_band = 8)
+    @test str.mean[1] ≈ 1 rtol = 0.1
+    @test str.mean[9] ≈ 4 rtol = 0.1
+    @test str.std[1] ≈ 1 rtol = 0.25
+    @test str.std[9] ≈ 4 rtol = 0.25
+
+    # Per-channel estimation (chans_per_band = 1)
+    st1 = noisestats(datab; chans_per_band = 1)
+    @test length(st1.mean) == 16
+    @test st1.mean[3] ≈ 1 rtol = 0.4
+    @test st1.mean[12] ≈ 4 rtol = 0.4
+
+    # Degenerate band (all-zero rows): Inf sigma, like the scalar path
+    dataz = zeros(8, 16)
+    dataz[5:8, :] .= 3.0 .+ randn(rngb, 4, 16)
+    stz = noisestats(dataz; chans_per_band = 4, robust = false)
+    @test stz.mean[1:4] == [0.0, 0.0, 0.0, 0.0]
+    @test stz.std[1:4] == [Inf, Inf, Inf, Inf]
+    @test isfinite(stz.std[5]) && abs(stz.mean[5] - 3) < 1.0
+
+    # Errors: non-positive, non-divisor, and iterables
+    @test_throws ArgumentError noisestats(datab; chans_per_band = 0)
+    @test_throws ArgumentError noisestats(datab; chans_per_band = 6)
+    @test_throws ArgumentError noisestats(datab; chans_per_band = 32)
+    @test_throws ArgumentError noisestats([datab]; chans_per_band = 4)
+end
+
+using CUDA
+
+if CUDA.functional()
+    @testset "noisestats [CUDA]" begin
+        gz = CuArray(zeros(Float32, 4, 4))
+        @test noisestats(gz; robust = false) == (mean = 0.0f0, std = Inf)
+        rngn = MersenneTwister(7)
+        d2 = randexp(rngn, Float32, 64, 128)
+        m, s = noisestats(CuArray(d2); robust = false)
+        @test 0 < s < Inf
+        # Per-channel stats through the GPU banded estimator
+        gzb = noisestats(CuArray(zeros(Float32, 8, 4));
+                         chans_per_band = 4, robust = false)
+        @test gzb.mean == fill(0.0f0, 8) && gzb.std == fill(Inf, 8)
+
+        # Banded non-robust statistics via the one-pass kernel:
+        # matches the host path (which uses Statistics.std's
+        # two-pass algorithm) to floating-point rounding
+        rngk = MersenneTwister(21)
+        gk = randexp(rngk, Float32, 64, 128)
+        sg = noisestats(gk; chans_per_band = 8, robust = false)
+        sh = noisestats(Array(gk); chans_per_band = 8, robust = false)
+        @test sg.mean ≈ sh.mean rtol = 1e-4
+        @test sg.std ≈ sh.std rtol = 1e-4
+        # degenerate (all-zero) bands yield Inf sigma, like the host
+        sz = noisestats(CuArray(zeros(Float32, 16, 8));
+                        chans_per_band = 8, robust = false)
+        @test sz.mean == fill(0.0f0, 16) && sz.std == fill(Inf, 16)
+    end
+
+    @testset "noisefloor [CUDA]" begin
+        rngg = MersenneTwister(11)
+        gm2 = randexp(rngg, Float32, 256, 256) .+
+              randexp(rngg, Float32, 256, 256)
+        gd = CuArray(gm2)
+        @test noisefloor(gd; k = 2).mean ≈ noisefloor(gm2; k = 2).mean
+        @test noisefloor(gd; k = 2).std ≈ noisefloor(gm2; k = 2).std
+        @test noisestats(gd; robust = true, k = 2) ==
+              noisestats(gm2; robust = true, k = 2)
+        @test noisestats(CuArray(zeros(Float32, 4, 4)); robust = true) ==
+              (mean = 0.0, std = Inf)
+    end
+
+    @testset "banded noisefloor [CUDA]" begin
+        rngb = MersenneTwister(31)
+        gb = randexp(rngb, Float32, 64, 128)
+        gbd = CuArray(gb)
+        # The batched device estimation matches the per-band host
+        # fallback: the quantile selection is bit-exact (integer
+        # histograms, host interpolation), so sigma matches exactly
+        # and the unrefined mean too; only the clipped-mean
+        # refinement sums differ, in reduction order.
+        sgb = noisestats(gbd; chans_per_band = 8)
+        shb = noisestats(gb; chans_per_band = 8)
+        @test sgb.mean ≈ shb.mean rtol = 1e-12
+        @test sgb.std == shb.std
+        sgn = noisestats(gbd; chans_per_band = 8, refine = false)
+        shn = noisestats(gb; chans_per_band = 8, refine = false)
+        @test sgn.mean == shn.mean && sgn.std == shn.std
+        # Bitwise reproducible across calls (deterministic partials)
+        @test noisestats(gbd; chans_per_band = 8) == sgb
+        # Keyword pass-through, with noisefloor's validation
+        @test noisestats(gbd; chans_per_band = 8, qlo = 0.2).std ==
+              noisestats(gb; chans_per_band = 8, qlo = 0.2).std
+        @test noisestats(gbd; chans_per_band = 8, k = 2) == sgb
+        @test_throws ArgumentError noisestats(gbd;
+                                              chans_per_band = 8,
+                                              qlo = 0.7)
+        # Mixed degenerate (all-zero) band: band mean of zeros and
+        # Inf sigma, like the host; other bands unaffected
+        gz = CuArray(vcat(zeros(Float32, 16, 128), gb))
+        sgz = noisestats(gz; chans_per_band = 16)
+        hgz = noisestats(Array(gz); chans_per_band = 16)
+        @test sgz.mean[1:16] == hgz.mean[1:16] == zeros(16)
+        @test sgz.std[1:16] == hgz.std[1:16] == fill(Inf, 16)
+        @test sgz.mean[17:80] ≈ hgz.mean[17:80] rtol = 1e-12
+        @test sgz.std[17:80] == hgz.std[17:80]
+        # Single-channel bands
+        s1 = noisestats(gbd; chans_per_band = 1)
+        h1 = noisestats(gb; chans_per_band = 1)
+        @test s1.std == h1.std
+        @test s1.mean ≈ h1.mean rtol = 1e-12
+        # NaNs are rejected on the first pass, like fast_quantile
+        gn = CuArray([1.0f0 NaN32; 3.0f0 4.0f0])
+        @test_throws ArgumentError noisestats(gn; chans_per_band = 1)
+    end
+else
+    @info "Skipping CUDA tests: no functional GPU available"
+end
