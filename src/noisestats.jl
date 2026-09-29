@@ -200,8 +200,20 @@ end
 
 """
     noisenormalize(scalar, m, s) -> normalized_scalar
-    noisenormalize!(data[, m, s]) -> same data (normalized in place)
-    noisenormalize!(datas[, m, s]) -> same datas (normalized in place)
+
+Normalize the value `scalar` by subtracting the mean `m` and dividing by
+the standard deviation `s`.  See [`noisenormalize!`](@ref) for in-place
+normalization of matrices and [`noisestats`](@ref) for computing `m` and
+`s` (which is robust to excess power contamination by default).
+"""
+function noisenormalize(value::Number, m, s)
+    value = (value - m) / s
+    return value
+end
+
+"""
+    noisenormalize!(data[, m, s]) -> data (normalized in place)
+    noisenormalize!(datas[, m, s]) -> datas (normalized in place)
 
 Normalize the matrix `data` (or matrices `datas`) in place by subtracting
 the mean and dividing by the standard deviation.  If not given, the
@@ -211,11 +223,6 @@ may also be given explicitly as `m` and `s`, respectively — as scalars, or
 as equal-length vectors for per-channel normalization (which broadcasts
 along the frequency axis).
 """
-function noisenormalize(value::Number, m, s)
-    value = (value - m) / s
-    return value
-end
-
 function noisenormalize!(data::AbstractMatrix, m, s)
     data .= (data .- m) ./ s
     return data
