@@ -8,11 +8,10 @@ Robust noise floor estimation for power (i.e. amplitude squared) data.
 
 The [`noisefloor`](@ref) function estimates the noise floor power of data
 whose noise is well modeled as the sum of two independent Gamma
-distributed components with equal shape (the natural
-distribution of integrated power samples from a radio spectrometer,
-where the two components are the polarizations).  The estimate is anchored on
-signal-free quantiles, so it stays accurate to within a few percent even
-at excess power contamination fractions of order 10%, where the plain mean
+distributed components with equal shape (for example, the sum of two
+polarizations from a radio telescope).  The estimate is anchored on
+contamination-resistant quantiles, so it stays accurate to within a few percent
+even at excess power contamination fractions of order 10%, where the plain mean
 and standard deviation are already badly biased.  When the common shape
 is known, the estimated moments are also split into the mean powers of the
 two components.
@@ -47,22 +46,22 @@ true
 ## Installation
 
 The package is not yet registered; install it and its FastQuantiles
-dependency directly from their repositories, running the `Pkg.develop`
-step below before the `Pkg.add` step so that the dependency can be
-resolved:
+dependency directly from their repositories, installing the unregistered
+FastQuantiles dependency first so that it can be resolved when
+NoiseEstimators is added:
 
 ```julia
 julia> using Pkg
 
-julia> Pkg.develop(url = "https://github.com/david-macmahon/FastQuantiles.jl")
+julia> Pkg.add(url = "https://github.com/david-macmahon/FastQuantiles.jl")
 
 julia> Pkg.add(url = "https://github.com/david-macmahon/NoiseEstimators.jl")
 ```
 
 ## How it works (briefly)
 
-The estimator anchors on signal-free quantiles (the `qlo` quantile and the
-median), iterates an
+The estimator anchors on contamination-resistant lower-tail quantiles (the
+`qlo` quantile and the median), iterates an
 *effective* Gamma shape to a fixed point (the two-component Gamma sum
 matches an effective Gamma in its first two moments), optionally refines
 the mean with a clipped-mean iteration that is bias-corrected for the

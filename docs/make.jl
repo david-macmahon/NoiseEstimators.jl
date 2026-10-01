@@ -10,7 +10,13 @@ makedocs(;
         edit_link = "main",
         assets = String[],
     ),
-    pages = ["Home" => "index.md"],
+    pages = [
+        "Home" => "index.md",
+        "Thresholding statistics" => "thresholding.md",
+        "Theory of operation" => "theory.md",
+        "Accuracy and tuning" => "accuracy.md",
+        "Worked example" => "example.md",
+    ],
 )
 
 deploydocs(;
