@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-01
+
+### Changed
+
+- Documentation: split the landing page into per-topic pages
+  (thresholding statistics, theory of operation, accuracy and tuning, and
+  a worked example), clarified the intro prose, and switched the README
+  installation instructions from `Pkg.develop` to `Pkg.add` for
+  FastQuantiles.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added
@@ -78,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   analysis, and a worked Voyager 2020 example), plus CI and docs-deployment
   GitHub Actions workflows.
 
-[Unreleased]: https://github.com/david-macmahon/NoiseEstimators.jl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/david-macmahon/NoiseEstimators.jl/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/david-macmahon/NoiseEstimators.jl/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/david-macmahon/NoiseEstimators.jl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/david-macmahon/NoiseEstimators.jl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/david-macmahon/NoiseEstimators.jl/releases/tag/v0.1.0

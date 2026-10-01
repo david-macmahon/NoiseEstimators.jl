@@ -1,7 +1,7 @@
 name = "NoiseEstimators"
 uuid = "cd5735f5-9448-4e01-a8d7-1e3d1ac6f922"
 authors = ["David MacMahon <davidm@astro.berkeley.edu> and contributors"]
-version = "0.3.0"
+version = "0.3.1"
 
 [deps]
 FastQuantiles = "606b4d82-a40a-45cf-9ba1-c57c34d0d81c"
