@@ -40,8 +40,8 @@ produces an `Inf` threshold (i.e. no hits).
 
 The optional `k` keyword (per-component Gamma shape) is passed through to
 `noisefloor` and improves the accuracy of the standard deviation estimate
-when the integration factor of the data is known.  The `qlo`, `clip`, and
-`refine` keywords of `noisefloor` are also passed through (they are
+when the integration factor of the data is known.  The `qlo`, `qhi`, and
+`clip` keywords of `noisefloor` are also passed through (they are
 ignored when `robust` is false).
 
 When the integer `chans_per_band` is given, the statistics are instead

@@ -19,12 +19,14 @@ quantiles by at most a few percent (worst for `k = 1` with imbalanced
 components), so the data's quantiles can be interpreted through an
 effective Gamma whose shape is itself estimated from the data:
 
-1. Compute the signal-free quantiles `qlo` (default 10%) and the median
+1. Compute the signal-free quantiles `qlo` (default 10%) and `qhi`
+   (default 50%)
    with [`FastQuantiles.fast_quantile`](https://david-macmahon.github.io/FastQuantiles.jl).
 2. Start from an initial effective shape and iterate to a fixed point:
-   the mean follows from the median via the Gamma `median/mean` ratio
-   `gam_med_mean(s) = Γ⁻¹(s, 1/2)/s`; the standard deviation follows from
-   the quantile span via `gam_med_qlo_sigma(s, qlo)`; and the new shape is
+   the mean follows from the upper quantile via the Gamma `quantile/mean`
+   ratio `gam_qhi_mean(s, qhi) = Γ⁻¹(s, qhi)/s`; the standard deviation
+   follows from the quantile span via
+   `gam_qhi_qlo_sigma(s, qhi, qlo)`; and the new shape is
    `mean²/std²` (clamped to `[1e-3, 1e8]`).  Each pass's shape feeds the
    next pass's conversion factors until `shape` stops moving (rtol 1e-8,
    at most 50 iterations).
@@ -32,14 +34,14 @@ effective Gamma whose shape is itself estimated from the data:
 Because the anchoring quantiles sit in the lower, signal-free tail of the
 distribution (where contamination, which only adds power, has little
 influence), the resulting `mean` and `std` remain accurate under
-contamination that catastrophically biases plain moments.  The median
-anchors the mean so its contamination response is largely independent of
-`qlo`; the spread estimate trades robustness against efficiency through
-`qlo` (see [Choosing `qlo`](@ref)).
+contamination that catastrophically biases plain moments.  The upper
+quantile anchors the mean, so its contamination response follows `qhi`;
+the spread estimate trades robustness against efficiency through both
+quantiles (see [Choosing the quantiles](@ref)).
 
 ## Refinement (clipped mean, optional)
 
-With `refine = true` (the default), the mean is refined by an iterated
+With `clip > 0` (off by default with `clip = 0`), the mean is refined by an iterated
 clipped mean with an *exact* Gamma bias correction.  For `X ~ Gamma(shape,
 θ)` with clip threshold `s = clip·mean`, the survivor fraction is
 `P(shape, clip·shape)` (regularized lower incomplete gamma) and the
@@ -55,8 +57,12 @@ debiased mean estimate is
 Iterating (at most 5 times, rtol 1e-6) converges the clipped threshold and
 the mean simultaneously.  The refinement touches only the **mean**: the
 `std` (and hence the split) remains the quantile-derived estimate.  Since
-the quantile-anchored mean is already unbiased, the refinement mainly
-improves *statistical efficiency* for small samples.
+the quantile-anchored mean is already unbiased, the refinement is a
+clean-data efficiency enhancement (by factors of ~1.3-4 in mean RMS,
+more for larger shapes and sample sizes).  It is off by default
+(`clip = 0`) because
+its contamination robustness depends on how the contamination is
+distributed in power (see [Choosing the quantiles](@ref)).
 
 ## Per-component split
 

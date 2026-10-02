@@ -28,6 +28,6 @@ which provides the quantile layer.
 - [Theory of operation](theory.md): the two-Gamma noise model behind
   `noisefloor` and the `k` convention for accumulated power data.
 - [Accuracy and tuning](accuracy.md): sample sizes required for the
-  per-component split and choosing `qlo`.
+  per-component split and choosing the anchoring quantiles.
 - [Worked example](example.md): the Breakthrough Listen Voyager 2020
   single coarse channel.

@@ -14,15 +14,15 @@
 # it is used to split the estimated moments into the mean powers of the
 # two components.
 
-# median / mean ratio of Gamma(k, 1)
-_gam_med_mean(k) = gamma_inc_inv(k, 0.5, 0.5) / k
+# qhi-quantile / mean ratio of Gamma(k, 1)
+_gam_qhi_mean(k, qhi) = gamma_inc_inv(k, qhi, 1 - qhi) / k
 
-# (median - lower quantile) / standard deviation ratio of Gamma(k, 1)
-_gam_med_qlo_sigma(k, qlo) =
-    (gamma_inc_inv(k, 0.5, 0.5) - gamma_inc_inv(k, qlo, 1 - qlo)) / sqrt(k)
+# (qhi - qlo quantile) / standard deviation ratio of Gamma(k, 1)
+_gam_qhi_qlo_sigma(k, qhi, qlo) =
+    (gamma_inc_inv(k, qhi, 1 - qhi) - gamma_inc_inv(k, qlo, 1 - qlo)) / sqrt(k)
 
 """
-    noisefloor(data; k=nothing, qlo=0.1, clip=4.0, refine=true) -> NamedTuple
+    noisefloor(data; k=nothing, qlo=0.1, qhi=0.5, clip=0.0) -> NamedTuple
 
 Estimate the noise floor power of `data` (e.g. an integrated power
 spectrogram), which is modeled as the sum of two independent Gamma
@@ -32,7 +32,7 @@ radio data) is handled naturally as the limit where one component's mean
 power is zero,
 for which the estimate is exact and the split reports `pow1 ≈ mean` and
 `pow2 ≈ 0`.  The estimate is robust to excess power contamination: it is
-anchored on the `qlo` quantile and the median of the data, so
+anchored on the `qlo` and `qhi` quantiles of the data, so
 the mean stays accurate to within a few percent even for contamination
 fractions of order 10% (the plain mean and standard deviation break down
 with far less contamination).
@@ -71,33 +71,49 @@ Keyword arguments:
   produced by path-summing `Nt` such samples (as done by drift-rate
   transforms), `n_accum * Nt`.  If omitted, the effective shape is
   estimated from the data and the per-component split is not reported.
-- `qlo`: lower quantile paired with the median for the spread estimate.
+- `qlo`: lower quantile paired with `qhi` for the spread estimate.
   Lower values (e.g. `0.05`) tolerate more excess power contamination; higher
   values (e.g. `0.2`) are more efficient on clean data; `0.1` is a good
-  compromise.  The contamination response of `mean` is largely independent
-  of `qlo` since the median anchors it.
+  compromise.  The contamination response of `mean` is largely governed
+  by `qhi` since the upper quantile anchors it.
+- `qhi`: upper quantile anchoring the mean and the upper end of the
+  spread estimate's span.  The default `0.5` (the median) is a good
+  compromise between contamination robustness and clean-data efficiency;
+  lower values tolerate more excess power contamination but make the
+  spread estimate less efficient (the two anchoring quantiles become more
+  correlated).  See the [choosing-the-quantiles section of the
+  documentation](@ref "Choosing the quantiles") for measured tradeoffs.
 - `clip`: clipping threshold, in units of the estimated mean, for the
-  optional clipped-mean refinement.
-- `refine`: whether to refine the mean estimate with an iterated clipped
-  mean (bias-corrected for the Gamma model).  This mainly improves the
-  statistical efficiency for small samples; the quantile-anchored estimate
-  is already unbiased.
+  optional clipped-mean refinement of the mean estimate (bias-corrected
+  for the Gamma model).  The default `0` disables the refinement: the
+  quantile-anchored estimates are the robust choice whose accuracy does
+  not depend on the distribution of the contamination.  Passing a value
+  of at least 1 enables the refinement, which improves the clean-data
+  efficiency of the mean (by factors of ~1.3-4 in RMS, depending on
+  shape and sample size), but its contamination robustness depends on
+  how the contamination is distributed in power; see the
+  [choosing-the-quantiles section of the
+  documentation](@ref "Choosing the quantiles").
 
 The data is treated as a global ensemble; per-channel (bandpass) estimation
 is not performed.  Degenerate data (all zeros, constant, or with a
-non-positive median) yields `mean = mean(data)` and `std = Inf` with all
+non-positive upper quantile) yields `mean = mean(data)` and `std = Inf`
+with all
 other fields `nothing`.  Arrays on an NVIDIA GPU (e.g. `CuArray`s) are
 supported via the CUDA extension of FastQuantiles.jl, which provides the
 quantile layer.
 """
-function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
-                    refine=true)
+function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.5,
+                    clip=0.0)
     k !== nothing && k <= 0 &&
         throw(ArgumentError("k must be positive"))
-    !(0 < qlo < 0.5) &&
-        throw(ArgumentError("qlo must be between 0 and 0.5"))
-    qlo_val, q50 = fast_quantile(data, [qlo, 0.5])
-    if !(q50 > 0) || !(qlo_val < q50)
+    !(0 < qlo < qhi < 1) &&
+        throw(ArgumentError("quantiles must satisfy 0 < qlo < qhi < 1"))
+    !(clip == 0 || clip >= 1) &&
+        throw(ArgumentError("clip must be 0 (no refinement) or at least 1 " *
+                            "(threshold in units of the estimated mean)"))
+    qlo_val, qhi_val = fast_quantile(data, [qlo, qhi])
+    if !(qhi_val > 0) || !(qlo_val < qhi_val)
         return (mean = Float64(mean(data)), std = Inf, shape = nothing,
                 pow1 = nothing, pow2 = nothing)
     end
@@ -106,12 +122,12 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, clip=4.0,
     # follows from the moment relation `k_eff = mean² / std²` and the mean
     # and standard deviation follow from the quantiles via the effective
     # Gamma conversion factors.
-    mom = _noise_moments(qlo_val, q50; qlo)
+    mom = _noise_moments(qlo_val, qhi_val; qlo, qhi)
     mean_est = mom.mean
     std_est = mom.std
     shape = mom.shape
 
-    if refine
+    if clip > 0
         # Iterated clipped mean with the exact Gamma bias correction: for
         # `X ~ Gamma(shape, θ)` with `θ = mean/shape` and clip threshold
         # `s = clip * mean`, the survivor fraction is
@@ -143,21 +159,21 @@ end
 # Moments (mean, standard deviation, effective Gamma shape) of the
 # two-Gamma noise model from signal-free quantiles, iterating the shape to a
 # fixed point (the quantile-to-moment conversion factors depend on the
-# shape).  Pure host math on `(qlo_val, q50)`; shared by `noisefloor` and
-# the batched per-band estimation of the CUDA extension.
-function _noise_moments(qlo_val, q50; qlo)
+# shape).  Pure host math on `(qlo_val, qhi_val)`; shared by `noisefloor`
+# and the batched per-band estimation of the CUDA extension.
+function _noise_moments(qlo_val, qhi_val; qlo, qhi)
     shape = 2.0
-    mean_est = q50 / _gam_med_mean(shape)
+    mean_est = qhi_val / _gam_qhi_mean(shape, qhi)
     std_est = 0.0
     for _ in 1:50
-        std_est = (q50 - qlo_val) / _gam_med_qlo_sigma(shape, qlo)
+        std_est = (qhi_val - qlo_val) / _gam_qhi_qlo_sigma(shape, qhi, qlo)
         shape_new = clamp(mean_est^2 / std_est^2, 1e-3, 1e8)
-        mean_new = q50 / _gam_med_mean(shape_new)
+        mean_new = qhi_val / _gam_qhi_mean(shape_new, qhi)
         done = isapprox(shape_new, shape; rtol = 1e-8)
         shape, mean_est = shape_new, mean_new
         done && break
     end
-    std_est = (q50 - qlo_val) / _gam_med_qlo_sigma(shape, qlo)
+    std_est = (qhi_val - qlo_val) / _gam_qhi_qlo_sigma(shape, qhi, qlo)
     (mean = mean_est, std = std_est, shape = shape)
 end
 
@@ -191,8 +207,7 @@ end
 
 # (mean, std) projection of `noisefloor` (the shape that thresholding
 # wrappers consume).
-function _noisefloor_stats(data; k = nothing, qlo = 0.1, clip = 4.0,
-                           refine = true)
-    nf = noisefloor(data; k, qlo, clip, refine)
+function _noisefloor_stats(data; k = nothing, qlo = 0.1, qhi = 0.5, clip = 0.0)
+    nf = noisefloor(data; k, qlo, qhi, clip)
     (mean = nf.mean, std = nf.std)
 end

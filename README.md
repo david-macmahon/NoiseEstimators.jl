@@ -61,9 +61,10 @@ julia> Pkg.add(url = "https://github.com/david-macmahon/NoiseEstimators.jl")
 ## How it works (briefly)
 
 The estimator anchors on contamination-resistant lower-tail quantiles (the
-`qlo` quantile and the median), iterates an
+`qlo` and `qhi` quantiles), iterates an
 *effective* Gamma shape to a fixed point (the two-component Gamma sum
-matches an effective Gamma in its first two moments), optionally refines
+matches an effective Gamma in its first two moments), optionally (when
+`clip > 0`) refines
 the mean with a clipped-mean iteration that is bias-corrected for the
 Gamma model, and (when the common shape is given) splits the
 estimated moments into the mean powers of the two components.  See the

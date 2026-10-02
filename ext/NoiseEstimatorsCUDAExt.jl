@@ -58,14 +58,14 @@ function _banded_colstats_kernel!(colmean::CuDeviceMatrix{T},
 end
 
 """
-    _noisefloor_banded(data::CuMatrix, cpb; k, qlo, clip, refine)
+    _noisefloor_banded(data::CuMatrix, cpb; k, qlo, qhi, clip)
         -> (mean = ..., std = ...)
 
 CUDA method of `_noisefloor_banded`: robust per-band statistics for the
 `cpb`-sized bands of rows of `data`, matching the host fallback's estimates
 (the quantile selection is bit-exact; only the clipped-mean refinement sums
 differ, in reduction order).  The per-band quantiles come from the batched
-banded selection `FastQuantiles.fast_quantile(data, cpb, [qlo, 0.5])`, which
+banded selection `FastQuantiles.fast_quantile(data, cpb, [qlo, qhi])`, which
 selects every band's quantiles in the same fixed handful of device passes;
 the host-side moment estimation and the optional clipped-mean refinement
 run per band from those quantiles, with the refinement's survivor count and
@@ -73,18 +73,21 @@ sum computed in fused batched count+sum passes
 (`_cuda_banded_countsum`).
 """
 function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
-                            qlo = 0.1, clip = 4.0,
-                            refine = true) where {T <: _select_eltypes}
+                            qlo = 0.1, qhi = 0.5, clip = 0.0) where {T <: _select_eltypes}
     k !== nothing && k <= 0 && throw(ArgumentError("k must be positive"))
-    !(0 < qlo < 0.5) && throw(ArgumentError("qlo must be between 0 and 0.5"))
+    !(0 < qlo < qhi < 1) &&
+        throw(ArgumentError("quantiles must satisfy 0 < qlo < qhi < 1"))
+    !(clip == 0 || clip >= 1) &&
+        throw(ArgumentError("clip must be 0 (no refinement) or at least 1 " *
+                            "(threshold in units of the estimated mean)"))
     Nf = size(data, 1)
     nbands = Nf ÷ cpb
-    qs = fast_quantile(data, cpb, [qlo, 0.5])
+    qs = fast_quantile(data, cpb, [qlo, qhi])
     qlo_vals = [q[1] for q in qs]
-    q50s = [q[2] for q in qs]
+    qhi_vals = [q[2] for q in qs]
     # Per-band moments and degenerate handling.  Degenerate bands
-    # (non-positive median, or lower quantile at the median) fall back to
-    # the band's plain mean and `Inf` sigma like `noisefloor`; the mean
+    # (non-positive upper quantile, or the lower quantile at it) fall back
+    # to the band's plain mean and `Inf` sigma like `noisefloor`; the mean
     # comes from one batched full-range count+sum pass.  (The host
     # fallback's `Float64(mean(buf))` accumulates in the band's eltype; for
     # the zeros and constants that trigger this path both agree exactly.)
@@ -93,12 +96,12 @@ function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
     shapes = Vector{Float64}(undef, nbands)
     degenerate = Int[]
     for b in 1:nbands
-        if !(q50s[b] > 0) || !(qlo_vals[b] < q50s[b])
+        if !(qhi_vals[b] > 0) || !(qlo_vals[b] < qhi_vals[b])
             push!(degenerate, b)
             means[b] = NaN  # placeholder until the batched band mean below
             stds[b] = Inf
         else
-            mom = _noise_moments(qlo_vals[b], q50s[b]; qlo)
+            mom = _noise_moments(qlo_vals[b], qhi_vals[b]; qlo, qhi)
             means[b] = mom.mean
             stds[b] = mom.std
             shapes[b] = mom.shape
@@ -111,7 +114,7 @@ function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
             means[b] = sums[i] / counts[i]
         end
     end
-    if refine
+    if clip > 0
         # Batched iterated clipped mean: every round thresholds each active
         # band at `clip * mean`, counts and sums the survivors in one fused
         # device pass, and advances each band independently until it

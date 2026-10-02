@@ -37,6 +37,19 @@ using NoiseEstimators
         @test nfq.std ≈ sqrt(4 * (1/9 + 4/9)) rtol = 0.1
     end
 
+    # The upper quantile `qhi` anchors the mean and the upper end of the
+    # spread's span; on clean data all reasonable values agree (the
+    # default 0.5 is the median)
+    for qhi in (0.3, 0.4, 0.5, 0.6)
+        nfh = noisefloor(nd; k = 4, qhi)
+        @test nfh.mean ≈ 4 * (1/3 + 2/3) rtol = 0.05
+        @test nfh.std ≈ sqrt(4 * (1/9 + 4/9)) rtol = 0.1
+    end
+
+    # The clipped-mean refinement (opt-in via clip > 0) improves the
+    # clean-data mean
+    @test noisefloor(nd; k = 4, clip = 4).mean ≈ 4 * (1/3 + 2/3) rtol = 0.03
+
     # Equal components: ratio 1 and effective shape 2k.  This sits
     # exactly on the split-identification ceiling, so either a split
     # near unity or NaN (unidentified) is acceptable
@@ -52,7 +65,11 @@ using NoiseEstimators
     ndc[1:10_000] .= 100 * 4
     nfst = noisefloor(ndc; k = 4)
     @test nfst.mean ≈ 4 rtol = 0.03
-    @test noisefloor(ndc; k = 4, refine = false).mean ≈ 4 rtol = 0.06
+    # The opt-in clipped-mean refinement also stays accurate for these
+    # rare strong outliers
+    @test noisefloor(ndc; k = 4, clip = 4).mean ≈ 4 rtol = 0.06
+    # A lower upper-quantile keeps (and slightly improves) the robustness
+    @test noisefloor(ndc; k = 4, qhi = 0.4).mean ≈ 4 rtol = 0.03
     @test mean(ndc) > 7
 
     # Auto-k mode: mean accurate, effective shape between k and 2k, and
@@ -82,6 +99,11 @@ using NoiseEstimators
     @test_throws ArgumentError noisefloor(nd; k = 0)
     @test_throws ArgumentError noisefloor(nd; qlo = 0)
     @test_throws ArgumentError noisefloor(nd; qlo = 0.5)
+    @test_throws ArgumentError noisefloor(nd; qhi = 1.0)
+    @test_throws ArgumentError noisefloor(nd; qhi = 0.05)  # qhi below qlo
+    @test_throws ArgumentError noisefloor(nd; qhi = 0.5, qlo = 0.5)
+    @test_throws ArgumentError noisefloor(nd; clip = 0.5)  # in (0, 1)
+    @test_throws ArgumentError noisefloor(nd; clip = -1)
 
     # An unidentified split (data less variable than the model allows)
     # is reported as NaN rather than a spurious balanced split
@@ -152,10 +174,11 @@ end
 @testset "noisestats per-channel" begin
     rngb = MersenneTwister(7)
     # Two 8-channel bands of Gamma(1, 1) noise (exponential power, the
-    # domain of the robust estimator): band 1 has mean 1, band 2 mean 4
-    datab = zeros(16, 64)
-    datab[1:8, :] .= randexp(rngb, 8, 64)
-    datab[9:16, :] .= 4.0 .* randexp(rngb, 8, 64)
+    # domain of the robust estimator); 2048 samples per band keeps the
+    # anchored (default, no refinement) estimates well within tolerance
+    datab = zeros(16, 256)
+    datab[1:8, :] .= randexp(rngb, 8, 256)
+    datab[9:16, :] .= 4.0 .* randexp(rngb, 8, 256)
 
     # Banded statistics repeat each band's estimate over its channels; the
     # plain mode pools each band's 8-by-64 block of 512 values, so its
@@ -248,25 +271,34 @@ if CUDA.functional()
         gbd = CuArray(gb)
         # The batched device estimation matches the per-band host
         # fallback: the quantile selection is bit-exact (integer
-        # histograms, host interpolation), so sigma matches exactly
-        # and the unrefined mean too; only the clipped-mean
-        # refinement sums differ, in reduction order.
+        # histograms, host interpolation), so the unrefined (default)
+        # mean and sigma match exactly
         sgb = noisestats(gbd; chans_per_band = 8)
         shb = noisestats(gb; chans_per_band = 8)
-        @test sgb.mean ≈ shb.mean rtol = 1e-12
+        @test sgb.mean == shb.mean
         @test sgb.std == shb.std
-        sgn = noisestats(gbd; chans_per_band = 8, refine = false)
-        shn = noisestats(gb; chans_per_band = 8, refine = false)
-        @test sgn.mean == shn.mean && sgn.std == shn.std
+        # The opt-in clipped-mean refinement matches to reduction order
+        sgr = noisestats(gbd; chans_per_band = 8, clip = 4)
+        shr = noisestats(gb; chans_per_band = 8, clip = 4)
+        @test sgr.mean ≈ shr.mean rtol = 1e-6
+        @test sgr.std == shr.std
         # Bitwise reproducible across calls (deterministic partials)
         @test noisestats(gbd; chans_per_band = 8) == sgb
         # Keyword pass-through, with noisefloor's validation
         @test noisestats(gbd; chans_per_band = 8, qlo = 0.2).std ==
               noisestats(gb; chans_per_band = 8, qlo = 0.2).std
+        @test noisestats(gbd; chans_per_band = 8, qhi = 0.4).std ==
+              noisestats(gb; chans_per_band = 8, qhi = 0.4).std
         @test noisestats(gbd; chans_per_band = 8, k = 2) == sgb
         @test_throws ArgumentError noisestats(gbd;
                                               chans_per_band = 8,
                                               qlo = 0.7)
+        @test_throws ArgumentError noisestats(gbd;
+                                              chans_per_band = 8,
+                                              qhi = 1.5)
+        @test_throws ArgumentError noisestats(gbd;
+                                              chans_per_band = 8,
+                                              clip = 0.5)
         # Mixed degenerate (all-zero) band: band mean of zeros and
         # Inf sigma, like the host; other bands unaffected
         gz = CuArray(vcat(zeros(Float32, 16, 128), gb))

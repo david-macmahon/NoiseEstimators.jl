@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `qhi` keyword (default `0.5`, the median) selecting the upper
+  anchoring quantile of `noisefloor`, passed through by `noisestats` and
+  its banded/CUDA variants.  Lower values tolerate more excess power
+  contamination at some clean-data efficiency cost, symmetric to the
+  `qlo` tradeoff; the default reproduces the previous estimates exactly.
+
+### Changed
+
+- The `refine` keyword is removed; the clipped-mean refinement of the
+  mean is now controlled by `clip`: the default `0` disables it (the
+  quantile-anchored estimates are the default path, whose accuracy does
+  not depend on the distribution of the contamination), and a value of
+  at least 1 enables it with that threshold (in units of the estimated
+  mean; values between 0 and 1 are rejected).  Enabling the refinement
+  buys clean-data efficiency (factors of ~1.3-4 in mean RMS); its
+  contamination robustness depends on how the contamination is
+  distributed in power.
+
 ## [0.3.1] - 2026-10-01
 
 ### Changed
