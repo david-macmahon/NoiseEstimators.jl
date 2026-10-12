@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+### Added
+
+- `anchor` keyword (default `:effective`) selecting the quantile
+  interpretation model of `noisefloor`, passed through by `noisestats`
+  and its banded/CUDA variants.  `anchor = :twogamma` solves the
+  anchoring quantiles through the exact two-Gamma model — the quantile
+  ratio identifies the power split and the level identifies the scale —
+  removing the effective-Gamma model-deviation bias entirely (worst-case
+  clean mean bias at `k = 1`: 7.5% -> 0.2% across power splits, with the
+  per-component split becoming accurate).  It requires `k` and is
+  opt-in: under contamination the exact anchor reports the quantile
+  displacement plainly, where the effective anchor's model bias
+  partially cancels it at small `k`.
+
+### Changed
+
+- The default upper anchoring quantile `qhi` is now `0.4` (was `0.5`,
+  the median).  Measured across contamination models (rare strong
+  outliers at 1%/100x, widespread mild contamination at 10%/1-10x, and a
+  bulk-overlap atom at 25%/1.5x, at `k = 1` and `k = 51`), `qhi = 0.4`'s
+  worst-case contaminated mean bias runs 0.6-8 percentage points below
+  the median's, at a ~20-30% higher clean-data spread RMS (both
+  negligible for "N sigma" thresholding).  Pass `qhi = 0.5` explicitly
+  to reproduce the previous default.
+
 ## [0.4.0] - 2026-10-02
 
 ### Added
