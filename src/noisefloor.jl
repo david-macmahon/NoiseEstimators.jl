@@ -12,7 +12,9 @@
 # mean estimate accurate to ~1-2% and the standard deviation to ~5% in the
 # worst case, both negligible for "N sigma" thresholding.  When `k` is given,
 # it is used to split the estimated moments into the mean powers of the
-# two components.
+# two components.  The `anchor = :twogamma` option instead interprets the
+# anchoring quantiles through the exact two-Gamma quantile function,
+# eliminating the model-deviation bias (it requires `k`).
 
 # qhi-quantile / mean ratio of Gamma(k, 1)
 _gam_qhi_mean(k, qhi) = gamma_inc_inv(k, qhi, 1 - qhi) / k
@@ -94,6 +96,17 @@ Keyword arguments:
   how the contamination is distributed in power; see the
   [choosing-the-quantiles section of the
   documentation](@ref "Choosing the quantiles").
+- `anchor`: quantile interpretation model.  The default `:effective`
+  interprets the anchoring quantiles through the moment-matched effective
+  Gamma, whose quantiles deviate from the exact two-Gamma model's by up
+  to a few percent (worst for small `k` with imbalanced components);
+  that deviation becomes a bias of the estimates, e.g. several percent
+  for `k = 1`.  `anchor = :twogamma` instead solves the anchoring
+  quantiles through the exact two-Gamma model — the quantile ratio
+  identifies the power split and the level the scale — eliminating the
+  model-deviation bias entirely when `k` is known (it requires `k`).
+  The estimates are then limited by quantile sampling noise and
+  contamination, not by the model approximation.
 
 The data is treated as a global ensemble; per-channel (bandpass) estimation
 is not performed.  Degenerate data (all zeros, constant, or with a
@@ -104,7 +117,11 @@ supported via the CUDA extension of FastQuantiles.jl, which provides the
 quantile layer.
 """
 function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.5,
-                    clip=0.0)
+                    clip=0.0, anchor=:effective)
+    anchor in (:effective, :twogamma) ||
+        throw(ArgumentError("anchor must be :effective or :twogamma"))
+    anchor === :twogamma && k === nothing &&
+        throw(ArgumentError("anchor = :twogamma requires k"))
     k !== nothing && k <= 0 &&
         throw(ArgumentError("k must be positive"))
     !(0 < qlo < qhi < 1) &&
@@ -121,11 +138,22 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.5,
     # Iterate the effective shape and mean to a fixed point: the shape
     # follows from the moment relation `k_eff = mean² / std²` and the mean
     # and standard deviation follow from the quantiles via the effective
-    # Gamma conversion factors.
-    mom = _noise_moments(qlo_val, qhi_val; qlo, qhi)
-    mean_est = mom.mean
-    std_est = mom.std
-    shape = mom.shape
+    # Gamma conversion factors.  With `anchor = :twogamma` the quantiles are
+    # instead interpreted through the exact two-Gamma model: the quantile
+    # ratio identifies the power split ρ and the level identifies the scale.
+    if anchor === :twogamma
+        mom = _noise_moments_exact(qlo_val, qhi_val, _twogamma_ratio(k, qlo, qhi), k)
+        mean_est = mom.mean
+        std_est = mom.std
+        shape = mom.shape
+        rho = mom.rho
+    else
+        mom = _noise_moments(qlo_val, qhi_val; qlo, qhi)
+        mean_est = mom.mean
+        std_est = mom.std
+        shape = mom.shape
+        rho = nothing
+    end
 
     if clip > 0
         # Iterated clipped mean with the exact Gamma bias correction: for
@@ -149,6 +177,8 @@ function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.5,
 
     if k === nothing
         pow1 = pow2 = nothing
+    elseif rho !== nothing
+        pow1, pow2 = mean_est * rho, mean_est * (1 - rho)
     else
         pow1, pow2 = _noise_pow(mean_est, std_est, k)
     end
@@ -207,7 +237,8 @@ end
 
 # (mean, std) projection of `noisefloor` (the shape that thresholding
 # wrappers consume).
-function _noisefloor_stats(data; k = nothing, qlo = 0.1, qhi = 0.5, clip = 0.0)
-    nf = noisefloor(data; k, qlo, qhi, clip)
+function _noisefloor_stats(data; k = nothing, qlo = 0.1, qhi = 0.5, clip = 0.0,
+                           anchor = :effective)
+    nf = noisefloor(data; k, qlo, qhi, clip, anchor)
     (mean = nf.mean, std = nf.std)
 end

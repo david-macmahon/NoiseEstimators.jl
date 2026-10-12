@@ -10,6 +10,7 @@ export noisefloor
 # noisestats.jl
 export noisestats, noisenormalize!, noisenormalize, noisedenormalize
 
+include("twogamma.jl")
 include("noisefloor.jl")
 include("noisestats.jl")
 

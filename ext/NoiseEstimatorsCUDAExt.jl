@@ -6,7 +6,8 @@
 module NoiseEstimatorsCUDAExt
 
 import NoiseEstimators: _banded_colstats!, _noisefloor_banded, _noise_moments,
-                        _noise_refine_step
+                        _noise_moments_exact, _noise_refine_step,
+                        _twogamma_ratio
 import FastQuantiles: fast_quantile, _select_eltypes
 
 using CUDA: CuMatrix, CuDeviceMatrix, CuDeviceVector, CuArray,
@@ -70,10 +71,17 @@ selects every band's quantiles in the same fixed handful of device passes;
 the host-side moment estimation and the optional clipped-mean refinement
 run per band from those quantiles, with the refinement's survivor count and
 sum computed in fused batched count+sum passes
-(`_cuda_banded_countsum`).
+(`_cuda_banded_countsum`).  `anchor = :twogamma` interprets the per-band
+quantiles through the exact two-Gamma model (requires `k`); one ratio
+table is built per call and shared by all bands.
 """
 function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
-                            qlo = 0.1, qhi = 0.5, clip = 0.0) where {T <: _select_eltypes}
+                            qlo = 0.1, qhi = 0.5, clip = 0.0,
+                            anchor = :effective) where {T <: _select_eltypes}
+    anchor in (:effective, :twogamma) ||
+        throw(ArgumentError("anchor must be :effective or :twogamma"))
+    anchor === :twogamma && k === nothing &&
+        throw(ArgumentError("anchor = :twogamma requires k"))
     k !== nothing && k <= 0 && throw(ArgumentError("k must be positive"))
     !(0 < qlo < qhi < 1) &&
         throw(ArgumentError("quantiles must satisfy 0 < qlo < qhi < 1"))
@@ -85,6 +93,8 @@ function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
     qs = fast_quantile(data, cpb, [qlo, qhi])
     qlo_vals = [q[1] for q in qs]
     qhi_vals = [q[2] for q in qs]
+    # One exact-anchor ratio table serves every band (k, qlo, qhi are shared)
+    table = anchor === :twogamma ? _twogamma_ratio(k, qlo, qhi) : nothing
     # Per-band moments and degenerate handling.  Degenerate bands
     # (non-positive upper quantile, or the lower quantile at it) fall back
     # to the band's plain mean and `Inf` sigma like `noisefloor`; the mean
@@ -101,7 +111,9 @@ function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
             means[b] = NaN  # placeholder until the batched band mean below
             stds[b] = Inf
         else
-            mom = _noise_moments(qlo_vals[b], qhi_vals[b]; qlo, qhi)
+            mom = anchor === :twogamma ?
+                  _noise_moments_exact(qlo_vals[b], qhi_vals[b], table, k) :
+                  _noise_moments(qlo_vals[b], qhi_vals[b]; qlo, qhi)
             means[b] = mom.mean
             stds[b] = mom.std
             shapes[b] = mom.shape

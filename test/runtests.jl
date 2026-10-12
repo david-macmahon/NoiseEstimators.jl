@@ -116,6 +116,58 @@ using NoiseEstimators
           (mean = noisefloor(nd; k = 4).mean, std = noisefloor(nd; k = 4).std)
 end
 
+@testset "noisefloor exact anchor" begin
+    nrng = MersenneTwister(43)
+    gamsamp(k, θ, n) = [θ * sum(randexp(nrng) for _ in 1:k) for _ in 1:n]
+    twopol(k, θ1, θ2, n) = gamsamp(k, θ1, n) .+ gamsamp(k, θ2, n)
+
+    # The exact anchor (anchor = :twogamma) solves the anchoring quantiles
+    # through the exact two-Gamma model, removing the effective-Gamma model
+    # bias that is worst for small k with imbalanced components: mean, std,
+    # and the per-component split all recover the truth (rho is the larger
+    # component's power fraction)
+    for (k, ρ) in ((1, 0.7), (1, 0.9), (4, 2 / 3))
+        nd = twopol(k, ρ, 1 - ρ, 1_000_000)
+        nex = noisefloor(nd; k, anchor = :twogamma)
+        @test nex.mean ≈ k rtol = 0.01
+        @test nex.std ≈ sqrt(k * (ρ^2 + (1 - ρ)^2)) rtol = 0.03
+        @test nex.pow1 ≈ k * ρ rtol = 0.06
+        @test nex.pow2 ≈ k * (1 - ρ) rtol = 0.06
+        @test nex.pow1 + nex.pow2 ≈ nex.mean rtol = 1e-6
+    end
+
+    # Balanced components: the sum is exactly Gamma(2k, θ/2), so the exact
+    # anchor agrees with the default there
+    nde = twopol(4, 0.5, 0.5, 1_000_000)
+    @test noisefloor(nde; k = 4, anchor = :twogamma).mean ≈
+          noisefloor(nde; k = 4).mean rtol = 0.02
+
+    # Single-component limit: the ratio sits at the ρ = 1 clamp and the
+    # estimates stay exact
+    nd1 = gamsamp(4, 1.0, 1_000_000)
+    nex1 = noisefloor(nd1; k = 4, anchor = :twogamma)
+    @test nex1.mean ≈ 4 rtol = 0.03
+    @test nex1.std ≈ 2 rtol = 0.05
+    @test nex1.pow1 / nex1.pow2 > 10
+
+    # Data less variable than any two-Gamma model (ratio below the ρ = 1/2
+    # bound) clamps and still returns finite estimates
+    ndz = 1.0 .+ 1e-3 .* randexp(nrng, 1000)
+    nfz = noisefloor(ndz; k = 4, anchor = :twogamma)
+    @test isfinite(nfz.mean) && isfinite(nfz.std) && nfz.shape == 8
+
+    # Keyword validation and (mean, std) projection / noisestats passthrough
+    ndv = twopol(1, 0.7, 0.3, 10_000)
+    @test_throws ArgumentError noisefloor(ndv; anchor = :bogus)
+    @test_throws ArgumentError noisefloor(ndv; anchor = :twogamma)
+    @test NoiseEstimators._noisefloor_stats(ndv; k = 1, anchor = :twogamma) ==
+          (mean = noisefloor(ndv; k = 1, anchor = :twogamma).mean,
+           std = noisefloor(ndv; k = 1, anchor = :twogamma).std)
+    ndm = reshape(ndv, :, 1)
+    @test noisestats(ndm; robust = true, k = 1, anchor = :twogamma) ==
+          NoiseEstimators._noisefloor_stats(ndv; k = 1, anchor = :twogamma)
+end
+
 @testset "noisestats" begin
     # The plain (robust = false) mode is the ensemble statistics of all
     # elements; a constant matrix (including all zeros) has zero standard
@@ -259,6 +311,8 @@ if CUDA.functional()
         gd = CuArray(gm2)
         @test noisefloor(gd; k = 2).mean ≈ noisefloor(gm2; k = 2).mean
         @test noisefloor(gd; k = 2).std ≈ noisefloor(gm2; k = 2).std
+        @test noisefloor(gd; k = 2, anchor = :twogamma).mean ≈
+              noisefloor(gm2; k = 2, anchor = :twogamma).mean
         @test noisestats(gd; robust = true, k = 2) ==
               noisestats(gm2; robust = true, k = 2)
         @test noisestats(CuArray(zeros(Float32, 4, 4)); robust = true) ==
@@ -290,6 +344,13 @@ if CUDA.functional()
         @test noisestats(gbd; chans_per_band = 8, qhi = 0.4).std ==
               noisestats(gb; chans_per_band = 8, qhi = 0.4).std
         @test noisestats(gbd; chans_per_band = 8, k = 2) == sgb
+        # Exact-anchor pass-through: bit-exact quantile selection makes the
+        # batched and per-band host estimates identical
+        @test noisestats(gbd; chans_per_band = 8, k = 2, anchor = :twogamma) ==
+              noisestats(gb; chans_per_band = 8, k = 2, anchor = :twogamma)
+        @test_throws ArgumentError noisestats(gbd;
+                                              chans_per_band = 8,
+                                              anchor = :twogamma)
         @test_throws ArgumentError noisestats(gbd;
                                               chans_per_band = 8,
                                               qlo = 0.7)
