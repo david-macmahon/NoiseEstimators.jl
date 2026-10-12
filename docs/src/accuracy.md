@@ -62,8 +62,30 @@ of samples replaced by powers drawn uniformly from 1x to 10x the floor:
 On clean data the higher quantiles are more efficient (the split error
 roughly halves from `qhi = 0.3` to `0.7`); under contamination every
 anchored estimate is biased less with the lower quantiles.  The default
-`qhi = 0.5` (the median) is the midpoint of that tradeoff, and keeps the
-mean's contamination response largely independent of `qlo`.
+`qhi = 0.4` sits on the robust side of that tradeoff: a sweep across
+contamination models (rare strong outliers at 1%/100x, widespread mild
+contamination at 10%/1-10x, and a bulk-overlap atom at 25%/1.5x, each
+with paired draws at `k = 1` and `k = 51`) shows its worst-case
+contaminated mean bias 0.6-8 percentage points below the median's, at a
+~20-30% higher clean-data spread RMS — both sides negligible for "N
+sigma" thresholding.
+
+### Exact two-Gamma anchoring
+
+The quantile conversion above interprets the anchoring quantiles through
+the *effective* Gamma, whose quantiles deviate from the exact two-Gamma
+model's (worst for small `k` with imbalanced components; see the
+quantile-deviation analysis in the theory section).  Passing
+`anchor = :twogamma` instead solves the two anchoring quantiles through
+the exact two-Gamma model — the quantile ratio is scale-invariant and
+identifies the power split, and the level identifies the scale — which
+removes that model-deviation bias entirely (measured worst-case clean
+mean bias at `k = 1`: 7.5% -> 0.2% across power splits, with the
+per-component split becoming accurate).  It requires `k` (without it the
+split is not identifiable from two quantiles) and is opt-in: under
+contamination the exact anchor reports the quantile displacement plainly,
+where the effective anchor's model bias partially cancels it at small
+`k`, so the raw contaminated bias can look larger there.
 
 Note that this contamination model is *widespread and mild*, which the
 opt-in clipped-mean refinement (enabled by `clip > 0`) handles less

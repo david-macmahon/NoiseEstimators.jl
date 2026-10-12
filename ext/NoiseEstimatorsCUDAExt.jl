@@ -76,7 +76,7 @@ quantiles through the exact two-Gamma model (requires `k`); one ratio
 table is built per call and shared by all bands.
 """
 function _noisefloor_banded(data::CuMatrix{T}, cpb::Int; k = nothing,
-                            qlo = 0.1, qhi = 0.5, clip = 0.0,
+                            qlo = 0.1, qhi = 0.4, clip = 0.0,
                             anchor = :effective) where {T <: _select_eltypes}
     anchor in (:effective, :twogamma) ||
         throw(ArgumentError("anchor must be :effective or :twogamma"))

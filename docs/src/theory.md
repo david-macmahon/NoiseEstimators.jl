@@ -20,7 +20,7 @@ components), so the data's quantiles can be interpreted through an
 effective Gamma whose shape is itself estimated from the data:
 
 1. Compute the signal-free quantiles `qlo` (default 10%) and `qhi`
-   (default 50%)
+   (default 40%)
    with [`FastQuantiles.fast_quantile`](https://david-macmahon.github.io/FastQuantiles.jl).
 2. Start from an initial effective shape and iterate to a fixed point:
    the mean follows from the upper quantile via the Gamma `quantile/mean`

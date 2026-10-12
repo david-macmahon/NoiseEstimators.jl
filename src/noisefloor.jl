@@ -24,7 +24,7 @@ _gam_qhi_qlo_sigma(k, qhi, qlo) =
     (gamma_inc_inv(k, qhi, 1 - qhi) - gamma_inc_inv(k, qlo, 1 - qlo)) / sqrt(k)
 
 """
-    noisefloor(data; k=nothing, qlo=0.1, qhi=0.5, clip=0.0) -> NamedTuple
+    noisefloor(data; k=nothing, qlo=0.1, qhi=0.4, clip=0.0) -> NamedTuple
 
 Estimate the noise floor power of `data` (e.g. an integrated power
 spectrogram), which is modeled as the sum of two independent Gamma
@@ -79,11 +79,15 @@ Keyword arguments:
   compromise.  The contamination response of `mean` is largely governed
   by `qhi` since the upper quantile anchors it.
 - `qhi`: upper quantile anchoring the mean and the upper end of the
-  spread estimate's span.  The default `0.5` (the median) is a good
-  compromise between contamination robustness and clean-data efficiency;
-  lower values tolerate more excess power contamination but make the
-  spread estimate less efficient (the two anchoring quantiles become more
-  correlated).  See the [choosing-the-quantiles section of the
+  spread estimate's span.  The default `0.4` sits on the robust side of
+  the measured robustness/efficiency tradeoff: Monte Carlo across
+  contamination models shows its worst-case contaminated bias running
+  ~0.6-8 percentage points below the median's (`qhi = 0.5`), at the cost
+  of a ~20-30% higher clean-data spread RMS (both negligible for "N
+  sigma" thresholding).  Lower values tolerate more excess power
+  contamination but make the spread estimate less efficient (the two
+  anchoring quantiles become more correlated).  See the
+  [choosing-the-quantiles section of the
   documentation](@ref "Choosing the quantiles") for measured tradeoffs.
 - `clip`: clipping threshold, in units of the estimated mean, for the
   optional clipped-mean refinement of the mean estimate (bias-corrected
@@ -116,7 +120,7 @@ other fields `nothing`.  Arrays on an NVIDIA GPU (e.g. `CuArray`s) are
 supported via the CUDA extension of FastQuantiles.jl, which provides the
 quantile layer.
 """
-function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.5,
+function noisefloor(data::AbstractArray{<:Real}; k=nothing, qlo=0.1, qhi=0.4,
                     clip=0.0, anchor=:effective)
     anchor in (:effective, :twogamma) ||
         throw(ArgumentError("anchor must be :effective or :twogamma"))
@@ -237,7 +241,7 @@ end
 
 # (mean, std) projection of `noisefloor` (the shape that thresholding
 # wrappers consume).
-function _noisefloor_stats(data; k = nothing, qlo = 0.1, qhi = 0.5, clip = 0.0,
+function _noisefloor_stats(data; k = nothing, qlo = 0.1, qhi = 0.4, clip = 0.0,
                            anchor = :effective)
     nf = noisefloor(data; k, qlo, qhi, clip, anchor)
     (mean = nf.mean, std = nf.std)
